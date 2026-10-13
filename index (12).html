@@ -1,0 +1,87 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,user-scalable=no">
+<title>Carrom Master — Mobile</title>
+<style>
+:root{color-scheme:dark;--gold:#f3c875;--ink:#1d120c}*{box-sizing:border-box}html,body{margin:0;min-height:100%;background:radial-gradient(ellipse at top,#3d2c23,#120e0c 75%);color:#fff3e0;font-family:system-ui,-apple-system,Segoe UI,sans-serif;overscroll-behavior:none}body{display:flex;align-items:center;justify-content:center}.app{width:min(100%,760px);padding:12px 12px max(12px,env(safe-area-inset-bottom));display:flex;flex-direction:column;gap:10px}header{display:flex;align-items:center;justify-content:space-between;gap:12px}h1{margin:0;font-size:clamp(20px,4vw,30px);letter-spacing:.4px}h1 span{color:var(--gold)}.tag{font-size:11px;opacity:.7}.stats{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}.stat{background:#ffffff12;border:1px solid #ffffff22;border-radius:13px;padding:8px 6px;text-align:center}.stat strong{display:block;color:var(--gold);font-variant-numeric:tabular-nums;font-size:clamp(19px,4vw,26px)}.stat small{font-size:11px;opacity:.78}.board-wrap{width:100%;display:flex;justify-content:center;min-height:0}canvas{display:block;width:min(100%,min(67dvh,660px));aspect-ratio:1/1;touch-action:none;user-select:none;border-radius:16px;box-shadow:0 12px 36px #0009;cursor:crosshair}.controls{display:flex;gap:8px;align-items:center;justify-content:space-between;flex-wrap:wrap}.controls button{border:1px solid #f5c77a55;color:#ffe5ae;background:#ffffff13;border-radius:11px;padding:10px 14px;font-size:13px;font-weight:700;cursor:pointer}.controls button:active{transform:scale(.97)}#reset{background:linear-gradient(135deg,#d59e49,#a86524);color:#1d130d;border:0}.message{font-size:12px;text-align:center;color:#f6dcab;min-height:18px}.help{font-size:11px;text-align:center;opacity:.7;line-height:1.5}.aimbar{display:flex;align-items:center;gap:10px;flex:1;min-width:145px;max-width:240px}.aimbar label{font-size:12px;white-space:nowrap}.aimbar input{width:100%;accent-color:#ebba6c}@media(orientation:landscape) and (max-height:560px){body{align-items:flex-start}.app{max-width:900px;display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.15fr);grid-template-rows:auto auto 1fr auto;gap:6px 12px;padding:6px 12px}.app header{grid-column:1;grid-row:1}.stats{grid-column:1;grid-row:2}.board-wrap{grid-column:2;grid-row:1/5;align-items:center}canvas{width:min(95%,91dvh)}.controls{grid-column:1;grid-row:3;align-content:start}.message{grid-column:1;grid-row:4}.help{display:none}h1{font-size:21px}.stat{padding:5px}.controls button{padding:8px 10px}}@media(max-width:410px){.app{gap:8px;padding:8px}canvas{width:min(100%,65dvh)}.controls button{padding:9px 11px}}
+</style>
+</head>
+<body>
+<main class="app">
+<header><div><h1>♛ Carrom <span>Master</span></h1><div class="tag">Touch • Mouse • Portrait & Landscape</div></div><button id="reset" type="button">↻ Restart</button></header>
+<section class="stats" aria-label="Game stats"><div class="stat"><strong id="score">0</strong><small>POINTS</small></div><div class="stat"><strong id="shots">25</strong><small>SHOTS LEFT</small></div><div class="stat"><strong id="remaining">19</strong><small>PIECES LEFT</small></div></section>
+<div class="board-wrap"><canvas id="game" width="720" height="720" aria-label="Playable carrom board"></canvas></div>
+<div class="controls"><button id="left" type="button">◀ Move</button><div class="aimbar"><label for="power">Power <output id="powerVal">65%</output></label><input id="power" type="range" min="20" max="100" value="65"></div><button id="right" type="button">Move ▶</button><button id="shoot" type="button">● Shoot</button></div>
+<div class="message" id="msg" aria-live="polite">Slide the striker, then drag backward and release to shoot!</div>
+<div class="help">Move striker on the baseline • Pull away from your target to aim • Release to shoot • Queen needs cover on the next shot.</div>
+</main>
+<script>
+'use strict';
+(()=>{
+const canvas=document.getElementById('game'),ctx=canvas.getContext('2d');
+const $=id=>document.getElementById(id);
+const SIZE=720, MIN=74, MAX=646, POCKET=36, R=14, SR=19, BASEY=566;
+let discs=[],striker,score=0,shots=25,shotActive=false,aiming=false,dragMode='',pointerId=null,pull={x:0,y:0},direction={x:0,y:-1},queenPending=false,coverRequired=false,queenCovered=false,shotPotted=0,shotQueen=false,shotFoul=false,ended=false,settleFrames=0,lastTime=0,acc=0;
+const bounds=(v,lo,hi)=>Math.min(hi,Math.max(lo,v));
+const randColor={white:'#fff6dd',black:'#292622',queen:'#bd2332'};
+const newDisc=(x,y,type)=>({x,y,vx:0,vy:0,r:R,m:1,type,alive:true});
+function start(){discs=[];score=0;shots=25;shotActive=false;aiming=false;dragMode='';queenPending=false;coverRequired=false;queenCovered=false;ended=false;direction={x:0,y:-1};
+const coords=[];const step=R*2+1;
+// 19 discs in a staggered compact honeycomb cluster.
+for(let row=-2;row<=2;row++)for(let col=-2;col<=2;col++){
+let x=360+col*step+(Math.abs(row)%2)*step/2,y=360+row*step*Math.sqrt(3)/2;
+if(Math.hypot(x-360,y-360)<73 && Math.hypot(x-360,y-360)>5)coords.push({x,y});
+}
+// Exact classic arrangement: center queen, six inner ring, twelve outer ring.
+discs=[newDisc(360,360,'queen')];
+for(let ring=1;ring<=2;ring++){const n=ring===1?6:12;for(let i=0;i<n;i++){let a=(i/n)*Math.PI*2+(ring===2?Math.PI/12:0);let type=((i+(ring===2?1:0))%2===0)?'white':'black';discs.push(newDisc(360+Math.cos(a)*ring*29.2,360+Math.sin(a)*ring*29.2,type));}}
+let whites=discs.filter(d=>d.type==='white').length,blacks=discs.filter(d=>d.type==='black').length;
+// Guarantee 9 white & 9 black in any ring configuration.
+let nonQ=discs.filter(d=>d.type!=='queen');nonQ.forEach((d,i)=>d.type=i%2===0?'white':'black');
+striker={x:360,y:BASEY,vx:0,vy:0,r:SR,m:2.1,type:'striker',alive:true};shotPotted=0;shotQueen=false;shotFoul=false;settleFrames=0;update();setMsg('Move the striker, pull backward, and release to shoot!');}
+function update(){$('score').textContent=score;$('shots').textContent=shots;$('remaining').textContent=discs.filter(d=>d.alive).length;}
+function setMsg(s){$('msg').textContent=s;}
+const pocketCenters=[[MIN,MIN],[MAX,MIN],[MIN,MAX],[MAX,MAX]];
+function draw(){let g=ctx.createLinearGradient(0,0,720,720);g.addColorStop(0,'#6c341a');g.addColorStop(.5,'#a46735');g.addColorStop(1,'#4d291a');ctx.fillStyle=g;ctx.fillRect(0,0,720,720);
+for(let i=0;i<30;i++){ctx.fillStyle=`rgba(255,238,174,${.014+(i%3)*.004})`;ctx.fillRect(28+i*23,28,1.2,664);}
+ctx.fillStyle='#3d1b0d';roundRect(35,35,650,650,28);ctx.fill();ctx.strokeStyle='#d9a258';ctx.lineWidth=5;ctx.stroke();ctx.fillStyle='#e4b77f';roundRect(60,60,600,600,10);ctx.fill();let wood=ctx.createLinearGradient(60,60,660,660);wood.addColorStop(0,'#f3d19a');wood.addColorStop(.5,'#e6b97c');wood.addColorStop(1,'#d69f63');ctx.fillStyle=wood;ctx.fillRect(74,74,572,572);
+for(let i=0;i<30;i++){ctx.fillStyle=`rgba(126,65,23,${(i%3+1)*.007})`;ctx.fillRect(75+i*19,74,1,572);}
+ctx.strokeStyle='#812e25';ctx.lineWidth=3;ctx.strokeRect(94,94,532,532);
+// decorative baseline pairs
+for(const y of [155,565]){ctx.strokeStyle='#963d30';ctx.lineWidth=3;ctx.beginPath();ctx.moveTo(170,y-15);ctx.lineTo(550,y-15);ctx.moveTo(170,y+15);ctx.lineTo(550,y+15);ctx.stroke();for(const x of [170,550]){ctx.beginPath();ctx.arc(x,y,16,0,Math.PI*2);ctx.stroke();ctx.fillStyle='#ac382e';ctx.beginPath();ctx.arc(x,y,7,0,Math.PI*2);ctx.fill();}}
+for(const x of [155,565]){ctx.beginPath();ctx.moveTo(x-15,170);ctx.lineTo(x-15,550);ctx.moveTo(x+15,170);ctx.lineTo(x+15,550);ctx.stroke();for(const y of [170,550]){ctx.beginPath();ctx.arc(x,y,16,0,Math.PI*2);ctx.stroke();}}
+ctx.strokeStyle='#9c4839';ctx.lineWidth=2.5;for(let r of [52,80]){ctx.beginPath();ctx.arc(360,360,r,0,Math.PI*2);ctx.stroke();}for(let i=0;i<8;i++){let a=i*Math.PI/4;ctx.beginPath();ctx.moveTo(360+Math.cos(a)*84,360+Math.sin(a)*84);ctx.lineTo(360+Math.cos(a)*103,360+Math.sin(a)*103);ctx.stroke();}
+for(const [x,y] of pocketCenters){ctx.fillStyle='#703d21';ctx.beginPath();ctx.arc(x,y,POCKET+6,0,2*Math.PI);ctx.fill();let p=ctx.createRadialGradient(x-5,y-5,1,x,y,POCKET);p.addColorStop(0,'#090806');p.addColorStop(1,'#301b12');ctx.fillStyle=p;ctx.beginPath();ctx.arc(x,y,POCKET,0,2*Math.PI);ctx.fill();ctx.strokeStyle='#4b1c11';ctx.lineWidth=4;ctx.stroke();}
+for(const d of discs)if(d.alive)drawDisc(d);if(striker.alive)drawDisc(striker);
+if(aiming&&!shotActive&&!ended){let len=Math.hypot(pull.x,pull.y);if(len>4){let ux=-pull.x/len,uy=-pull.y/len;ctx.lineWidth=3;ctx.setLineDash([11,9]);ctx.strokeStyle='#2c8067';ctx.beginPath();ctx.moveTo(striker.x,striker.y);ctx.lineTo(striker.x+ux*240,striker.y+uy*240);ctx.stroke();ctx.setLineDash([]);ctx.strokeStyle='#ffffffaa';ctx.lineWidth=4;ctx.beginPath();ctx.moveTo(striker.x,striker.y);ctx.lineTo(striker.x+pull.x,striker.y+pull.y);ctx.stroke();ctx.fillStyle='#326f56';ctx.fillRect(260,685,200,10);ctx.fillStyle='#f2cd6a';ctx.fillRect(260,685,Math.min(200,len/155*200),10);}}
+if(ended){ctx.fillStyle='#160d0ac9';roundRect(175,273,370,166,18);ctx.fill();ctx.textAlign='center';ctx.fillStyle='#ffe1a3';ctx.font='bold 36px system-ui';ctx.fillText(discs.every(d=>!d.alive)?'BOARD CLEARED!':'GAME OVER',360,337);ctx.font='22px system-ui';ctx.fillText('Final score: '+score,360,378);ctx.font='16px system-ui';ctx.fillText('Tap Restart to play again',360,413);}
+}
+function roundRect(x,y,w,h,r){ctx.beginPath();ctx.roundRect(x,y,w,h,r);}
+function drawDisc(d){ctx.save();ctx.shadowColor='#2a170f99';ctx.shadowBlur=7;ctx.shadowOffsetY=3;let color=randColor[d.type]||'#e8d9a7';let grad=ctx.createRadialGradient(d.x-d.r*.3,d.y-d.r*.4,2,d.x,d.y,d.r);grad.addColorStop(0,d.type==='striker'?'#fffaf0':d.type==='black'?'#55514d':d.type==='queen'?'#ed5b60':'#fffef1');grad.addColorStop(1,color);ctx.fillStyle=grad;ctx.beginPath();ctx.arc(d.x,d.y,d.r,0,Math.PI*2);ctx.fill();ctx.shadowColor='transparent';ctx.lineWidth=d.type==='striker'?4:2;ctx.strokeStyle=d.type==='striker'?'#b96524':d.type==='black'?'#b39f81':'#9a6b46';ctx.stroke();ctx.beginPath();ctx.arc(d.x,d.y,d.r*.59,0,Math.PI*2);ctx.lineWidth=1.5;ctx.strokeStyle=d.type==='black'?'#c4b4a1':'#b9874d';ctx.stroke();if(d.type==='striker'){ctx.fillStyle='#b75e25';ctx.beginPath();ctx.arc(d.x,d.y,4,0,Math.PI*2);ctx.fill();}if(d.type==='queen'){ctx.fillStyle='#fff3b5';ctx.font='bold 17px system-ui';ctx.textAlign='center';ctx.textBaseline='middle';ctx.fillText('♛',d.x,d.y+1);}ctx.restore();}
+function collide(a,b){let dx=b.x-a.x,dy=b.y-a.y,ds=dx*dx+dy*dy,min=a.r+b.r;if(ds>=min*min)return;let dist=Math.sqrt(ds);if(dist<.0001){dx=.01;dy=.01;dist=Math.hypot(dx,dy);}let nx=dx/dist,ny=dy/dist,overlap=min-dist;let total=a.m+b.m;a.x-=nx*overlap*(b.m/total);a.y-=ny*overlap*(b.m/total);b.x+=nx*overlap*(a.m/total);b.y+=ny*overlap*(a.m/total);let rel=(b.vx-a.vx)*nx+(b.vy-a.vy)*ny;if(rel>=0)return;let impulse=-(1+.92)*rel/(1/a.m+1/b.m);a.vx-=impulse*nx/a.m;a.vy-=impulse*ny/a.m;b.vx+=impulse*nx/b.m;b.vy+=impulse*ny/b.m;}
+function step(dt){if(!shotActive)return;const objs=[...discs.filter(d=>d.alive),...(striker.alive?[striker]:[])];for(const d of objs){d.x+=d.vx*dt;d.y+=d.vy*dt;let pocketed=false;for(const [px,py] of pocketCenters)if(Math.hypot(d.x-px,d.y-py)<POCKET-d.r*.33){d.alive=false;pocketed=true;if(d.type==='striker'){shotFoul=true;setMsg('Striker foul! −10 points');}else if(d.type==='queen'){shotQueen=true;setMsg('Queen pocketed! Cover it on next shot.');}else{score+=d.type==='white'?10:5;shotPotted++;}break;}if(pocketed)continue;
+if(d.x-d.r<MIN){d.x=MIN+d.r;d.vx=Math.abs(d.vx)*.87;}if(d.x+d.r>MAX){d.x=MAX-d.r;d.vx=-Math.abs(d.vx)*.87;}if(d.y-d.r<MIN){d.y=MIN+d.r;d.vy=Math.abs(d.vy)*.87;}if(d.y+d.r>MAX){d.y=MAX-d.r;d.vy=-Math.abs(d.vy)*.87;}
+let fr=Math.pow(.985,dt*60);d.vx*=fr;d.vy*=fr;if(Math.hypot(d.vx,d.vy)<5){d.vx=0;d.vy=0;}}
+for(let k=0;k<3;k++){for(let i=0;i<objs.length;i++)if(objs[i].alive)for(let j=i+1;j<objs.length;j++)if(objs[j].alive)collide(objs[i],objs[j]);}
+if(objs.every(o=>!o.alive||Math.hypot(o.vx,o.vy)<7))settleFrames++;else settleFrames=0;
+if(settleFrames>16)finishShot();update();}
+function finishShot(){shotActive=false;settleFrames=0;if(shotFoul)score=Math.max(0,score-10);
+if(coverRequired){if(shotPotted>0&&!shotFoul){queenCovered=true;score+=30;setMsg('Queen covered! +30 points');}else{let q=discs.find(d=>d.type==='queen');if(q){q.alive=true;q.x=360;q.y=360;q.vx=0;q.vy=0;for(const d of discs)if(d!==q&&d.alive&&Math.hypot(d.x-360,d.y-360)<d.r+q.r+2){let a=Math.atan2(d.y-360,d.x-360);d.x=360+Math.cos(a)*36;d.y=360+Math.sin(a)*36;}}setMsg('Queen not covered — returned to center.');}coverRequired=false;}
+if(shotQueen){if(shotPotted>0&&!shotFoul){score+=30;queenCovered=true;setMsg('Queen covered in the same shot! +30');}else if(!shotFoul){coverRequired=true;setMsg('Queen pocketed! Pocket a white/black piece next shot.');}else{let q=discs.find(d=>d.type==='queen');if(q){q.alive=true;q.x=360;q.y=360;}}}
+if(!shotQueen&&!coverRequired&&!shotFoul&&shotPotted===0)setMsg('Aim and shoot again.');
+if(discs.every(d=>!d.alive)||shots<=0){ended=true;setMsg('Game finished! Final score: '+score);}
+striker.alive=true;striker.x=360;striker.y=BASEY;striker.vx=0;striker.vy=0;shotQueen=false;shotPotted=0;shotFoul=false;update();}
+function shoot(dx,dy,power){if(shotActive||ended||shots<=0)return;let len=Math.hypot(dx,dy);if(len<.01){dx=0;dy=-1;len=1;}striker.vx=dx/len*power;striker.vy=dy/len*power;direction={x:dx/len,y:dy/len};shots--;shotActive=true;aiming=false;shotQueen=false;shotPotted=0;shotFoul=false;settleFrames=0;update();setMsg('Shot in progress…');}
+function pointerPos(e){const r=canvas.getBoundingClientRect();return{x:(e.clientX-r.left)*SIZE/r.width,y:(e.clientY-r.top)*SIZE/r.height};}
+canvas.addEventListener('pointerdown',e=>{if(shotActive||ended)return;e.preventDefault();const p=pointerPos(e);pointerId=e.pointerId;canvas.setPointerCapture(e.pointerId);if(Math.abs(p.y-BASEY)<39 && Math.abs(p.x-striker.x)<54){dragMode='place';striker.x=bounds(p.x,200,520);}else{dragMode='aim';aiming=true;pull={x:p.x-striker.x,y:p.y-striker.y};}});
+canvas.addEventListener('pointermove',e=>{if(e.pointerId!==pointerId||shotActive||ended)return;let p=pointerPos(e);if(dragMode==='place'){striker.x=bounds(p.x,200,520);}else if(dragMode==='aim'){pull={x:p.x-striker.x,y:p.y-striker.y};let l=Math.hypot(pull.x,pull.y);if(l>155){pull.x*=155/l;pull.y*=155/l;}}});
+function pointerUp(e){if(e.pointerId!==pointerId)return;pointerId=null;if(dragMode==='aim'){const mag=Math.hypot(pull.x,pull.y);if(mag>14){let power=bounds(mag/155,0.12,1)*(350+Number($('power').value)*8);shoot(-pull.x,-pull.y,power);}else aiming=false;}dragMode='';}
+canvas.addEventListener('pointerup',pointerUp);canvas.addEventListener('pointercancel',()=>{pointerId=null;dragMode='';aiming=false;});
+$('power').addEventListener('input',()=>{$('powerVal').textContent=$('power').value+'%';});$('left').onclick=()=>{if(!shotActive&&!ended)striker.x=bounds(striker.x-26,200,520);};$('right').onclick=()=>{if(!shotActive&&!ended)striker.x=bounds(striker.x+26,200,520);};$('shoot').onclick=()=>shoot(direction.x,direction.y,350+Number($('power').value)*8);$('reset').onclick=start;
+window.addEventListener('keydown',e=>{if(e.key==='ArrowLeft'){striker.x=bounds(striker.x-15,200,520);e.preventDefault();}if(e.key==='ArrowRight'){striker.x=bounds(striker.x+15,200,520);e.preventDefault();}if(e.key===' '){shoot(direction.x,direction.y,350+Number($('power').value)*8);e.preventDefault();}});
+function loop(t){let dt=Math.min(.04,(t-lastTime)/1000||0);lastTime=t;acc+=dt;let count=0;while(acc>=1/120&&count++<6){step(1/120);acc-=1/120;}if(count>6)acc=0;draw();requestAnimationFrame(loop);}start();requestAnimationFrame(loop);
+})();
+</script>
+</body>
+</html>
